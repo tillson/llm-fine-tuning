@@ -69,3 +69,7 @@ class SimPOConfig(TrainingArguments):
 
     dataset_num_proc: Optional[int] = None
 
+    sample: Optional[float] = None
+
+    ranking_type: Optional[Literal["random", "length", "complexity"]] = None
+

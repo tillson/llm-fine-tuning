@@ -20,6 +20,8 @@ import sys
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, set_seed
+import ranking
+
 
 from alignment import (
     DataArguments,
@@ -40,6 +42,8 @@ from simpo_trainer import SimPOTrainer
 from simpo_config import SimPOConfig
 from dataclasses import dataclass, field
 from typing import Optional, Literal
+
+from trl import DPOTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -120,9 +124,15 @@ def apply_chat_template(
         )
     return example
 
+@dataclass
+class CustomDPOConfig(DPOConfig):
+    sample: Optional[float] = None
+    ranking_type: Optional[Literal["random", "length", "complexity"]] = None
 
 def main():
-    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
+
+
+    parser = H4ArgumentParser((ModelArguments, DataArguments, CustomDPOConfig))
     model_args, data_args, training_args = parser.parse()
 
     #######
@@ -162,12 +172,22 @@ def main():
         columns_to_keep=["messages", "chosen", "rejected", "prompt", "completion", "label"],
         # seed=training_args.seed,
     )
-    logger.info(
-        f"Training on the following splits: {[split + ' : ' + str(dset.num_rows) for split, dset in raw_datasets.items()]}"
-    )
     column_names = list(raw_datasets["train"].features)
 
     
+    if training_args.ranking_type == "random":
+        raw_datasets = ranking.get_shuffled_dataset(raw_datasets)
+    elif training_args.ranking_type == "length":
+        raw_datasets = ranking.get_length_sorted(raw_datasets)
+    elif training_args.ranking_type == "complexity":
+        raw_datasets = ranking.get_complexity_sorted(raw_datasets)
+
+    logger.info(
+        f"Training on the following splits: {[split + ' : ' + str(dset.num_rows) for split, dset in raw_datasets.items()]}"
+    )
+    logger.info(
+        f"Training with ranking type: {training_args.ranking_type}"
+    )
 
 
     #####################################
@@ -250,15 +270,16 @@ def main():
 
     training_args.model_init_kwargs = model_kwargs
     #########################
-    # Instantiate SimPO trainer
+    # Instantiate DPO trainer
     #########################
-    trainer = SimPOTrainer(
+    trainer = DPOTrainer(
         model=model,
+        ref_model=model,
         args=training_args,
         train_dataset=raw_datasets["train"],
         eval_dataset=raw_datasets["test"],
         tokenizer=tokenizer,
-        peft_config=get_peft_config(model_args),
+        peft_config=None # get_peft_config(model_args),
     )
 
     ###############

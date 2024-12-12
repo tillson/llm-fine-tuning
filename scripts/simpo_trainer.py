@@ -267,9 +267,9 @@ class SimPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().local_main_process_first():
             # tokenize the dataset
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(self.tokenize_row, num_proc=32)
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=8)
 
         super().__init__(
             model=model,

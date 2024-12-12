@@ -2,7 +2,14 @@ name: simpo
 channels:
   - conda-forge
   - defaults
+  - pytorch
+  - nvidia
 dependencies:
+  - pytorch==2.2.2
+  - pytorch-cuda=12.1
+  - torchvision
+  - torchaudio
+  - pip
   - _libgcc_mutex=0.1=main
   - _openmp_mutex=5.1=1_gnu
   - asttokens=2.4.1=pyhd8ed1ab_0

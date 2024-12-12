@@ -16,10 +16,15 @@
 import logging
 import random
 import sys
+import glob
+import gc
+from numba import cuda
 
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, set_seed
+import os
+import json
 
 from alignment import (
     DataArguments,
@@ -40,6 +45,7 @@ from simpo_trainer import SimPOTrainer
 from simpo_config import SimPOConfig
 from dataclasses import dataclass, field
 from typing import Optional, Literal
+from datasets import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +128,30 @@ def apply_chat_template(
 
 
 def main():
-    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
-    model_args, data_args, training_args = parser.parse()
+
+    @dataclass
+    class EvalConfig:
+        checkpoint: float = 0.1
+        task: str = "simpo"
+
+    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig, EvalConfig))
+    model_args, data_args, training_args, eval_args = parser.parse()
+    print(eval_args)
+
+    output_file = os.path.join(training_args.output_dir, f"eval-new.json")
+
+    # Check if the file exists and if checkpoint_prop is already in the file
+    if os.path.exists(output_file):
+        with open(output_file, "r") as f:
+            for line in f:
+                try:
+                    logged_metrics = json.loads(line)
+                    if "checkpoint_prop" in logged_metrics and logged_metrics["checkpoint_prop"] == eval_args.checkpoint:
+                        print(f"Checkpoint {eval_args.checkpoint} is already logged in {output_file}. Exiting.")
+                        exit(0)
+                except json.JSONDecodeError:
+                    print("Error reading JSON line. Skipping.")
+
 
     #######
     # Setup
@@ -175,6 +203,7 @@ def main():
     #####################################
     data_args.truncation_side = "left"  # Truncate from left to ensure we don't lose labels in final turn
     tokenizer = get_tokenizer(model_args, data_args)
+    # tokenizer.default_chat_template = tokenizer.get_chat_template()
 
     if "mistral" in model_args.model_name_or_path.lower():
         change_template = "mistral"
@@ -187,7 +216,7 @@ def main():
         apply_chat_template,
         fn_kwargs={
             "tokenizer": tokenizer,
-            "task": "simpo",
+            "task": eval_args.task,
             "auto_insert_empty_system_msg": data_args.auto_insert_empty_system_msg,
             "change_template": change_template,
         },
@@ -248,71 +277,84 @@ def main():
     #     )
     #     model_kwargs = None
 
+    model = model_args.model_name_or_path
+    # seems to require internet
+
     training_args.model_init_kwargs = model_kwargs
-    #########################
-    # Instantiate SimPO trainer
-    #########################
+
+    # # Example values
+    # checkpoints = glob.glob(f"{training_args.output_dir}/checkpoint-*")
+    # print("CHECKPOINT IS")
+    # print(f"{training_args.output_dir}/checkpoint-{eval_args.checkpoint}")
+    # sample_rate = eval_args.checkpoint  # Replace with your actual `training_args.sample` value
+
+    # # Extract the numerical values from checkpoints and sort
+    # checkpoints = sorted(checkpoints, key=lambda x: int(x.split('-')[-1]))
+
+    # # Get the maximum checkpoint number
+    # max_checkpoint = int(checkpoints[-1].split('-')[-1])
+
+    # # Calculate the target value
+    # target = sample_rate * max_checkpoint
+
+    # # Find the closest checkpoint without exceeding the target
+    # closest_checkpoint = None
+    # for checkpoint in checkpoints:
+    #     checkpoint_num = int(checkpoint.split('-')[-1])
+    #     if checkpoint_num <= target:
+    #         closest_checkpoint = checkpoint
+    #     else:
+    #         break
+
+    # print(f"Processing checkpoint: {closest_checkpoint}")
+    
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        torch_dtype=torch_dtype,
+        use_cache=False if training_args.gradient_checkpointing else True,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
+        attn_implementation=model_args.attn_implementation,
+    )
+    training_args.model_init_kwargs = None # model_kwargs
+
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path)
+
+    # print(model)
     trainer = SimPOTrainer(
         model=model,
         args=training_args,
-        train_dataset=raw_datasets["train"],
+        train_dataset=Dataset.from_dict({}), # raw_datasets["train"],
         eval_dataset=raw_datasets["test"],
         tokenizer=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
-    ###############
-    # Training loop
-    ###############
-    checkpoint = None
-    if training_args.resume_from_checkpoint is not None:
-        checkpoint = training_args.resume_from_checkpoint
-    elif last_checkpoint is not None:
-        checkpoint = last_checkpoint
-    train_result = trainer.train(resume_from_checkpoint=checkpoint)
-    metrics = train_result.metrics
-    metrics["train_samples"] = len(raw_datasets["train"])
-    trainer.log_metrics("train", metrics)
-    trainer.save_metrics("train", metrics)
-    trainer.save_state()
+    # del model
+    # del trainer
+    # gc.collect()
+    # torch.cuda.empty_cache()
+    # device = cuda.get_current_device()
+    # device.reset()
+    # break
 
-    logger.info("*** Training complete ***")
+    metrics = trainer.evaluate()
+    print(metrics)
+    # metrics["eval_samples"] = len(raw_datasets["test"])
+    # metrics["checkpoint_prop"] = eval_args.checkpoint
+    # metrics["checkpoint"] = closest_checkpoint
 
-    ##################################
-    # Save model and create model card
-    ##################################
-    logger.info("*** Save model ***")
-    trainer.save_model(training_args.output_dir)
-    logger.info(f"Model saved to {training_args.output_dir}")
+    # trainer.log_metrics("eval-" + str(checkpoint), metrics)
+    # output_file = os.path.join(training_args.output_dir, f"eval-new.json")
+    # with open(output_file, "a+") as f:
+    #     f.write(json.dumps(metrics) + "\n")
+    
+    # trainer.save_metrics("eval" + str(checkpoint), metrics)
 
-    # Save everything else on main process
-    kwargs = {
-        "finetuned_from": model_args.model_name_or_path,
-        "dataset": list(data_args.dataset_mixer.keys()),
-        "dataset_tags": list(data_args.dataset_mixer.keys()),
-        "tags": ["alignment-handbook"],
-    }
-    if trainer.accelerator.is_main_process:
-        trainer.create_model_card(**kwargs)
-        # Restore k,v cache for fast inference
-        trainer.model.config.use_cache = True
-        trainer.model.config.save_pretrained(training_args.output_dir)
+    # open("/data/tillson/llm-project/SimPO/outputs/" + )
 
-    ##########
-    # Evaluate
-    ##########
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate()
-        metrics["eval_samples"] = len(raw_datasets["test"])
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    if training_args.push_to_hub is True:
-        logger.info("Pushing to hub...")
-        trainer.push_to_hub(**kwargs)
-
-    logger.info("*** Training complete! ***")
+    logger.info("*** Evaluation complete ***")
 
 
 if __name__ == "__main__":

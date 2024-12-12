@@ -5,11 +5,11 @@ attn_implementation: flash_attention_2
 
 # Data training arguments
 dataset_mixer:
-  HuggingFaceH4/ultrafeedback_binarized: 1.0
+  HuggingFaceH4/ultrafeedback_binarized: 0.01
 dataset_splits:
 - train_prefs
 - test_prefs
-preprocessing_num_workers: 12
+preprocessing_num_workers: 8
 
 # SimPOTrainer arguments
 bf16: true
@@ -31,15 +31,19 @@ max_length: 1024
 max_prompt_length: 512
 num_train_epochs: 1
 optim: adamw_torch
-output_dir: outputs/mistral-7b-base-simpo
+output_dir: outputs/mistral-7b-base-simpo-new
 run_name: mistral-7b-base-simpo
 per_device_train_batch_size: 2
 per_device_eval_batch_size: 4
 push_to_hub: false
 save_strategy: "steps"
-save_steps: 1000000
+save_steps: 50
 report_to:
 - wandb
-save_total_limit: 20
+save_total_limit: 20000
 seed: 42
 warmup_ratio: 0.1
+
+sample: 0.1
+ranking_type: random # random, length, complexity
+task: simpo

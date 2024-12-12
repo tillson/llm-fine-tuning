@@ -7,7 +7,7 @@ attn_implementation: flash_attention_2
 # Data training arguments
 chat_template: "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
 dataset_mixer:
-  HuggingFaceH4/ultrachat_200k: 1.0
+  HuggingFaceH4/ultrafeedback_binarized: 1.0
 dataset_splits:
 - train_sft
 - test_sft
@@ -29,7 +29,7 @@ log_level: info
 logging_steps: 5  
 logging_strategy: steps
 lr_scheduler_type: cosine
-max_seq_length: 2048
+# max_seq_length: 2048
 max_steps: -1
 num_train_epochs: 1
 output_dir: /scratch/gpfs/DANQIC/ym0081/checkpoints_new/llama-3-8b-sft

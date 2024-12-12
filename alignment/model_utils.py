@@ -86,9 +86,9 @@ def get_tokenizer(
     if tokenizer.model_max_length > 100_000:
         tokenizer.model_max_length = 2048
 
-    if data_args.chat_template is not None:
+    try:
         tokenizer.chat_template = data_args.chat_template
-    elif auto_set_chat_template and tokenizer.chat_template is None and tokenizer.default_chat_template is None:
+    except:
         tokenizer.chat_template = DEFAULT_CHAT_TEMPLATE
 
     return tokenizer

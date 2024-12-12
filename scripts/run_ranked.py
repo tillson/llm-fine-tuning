@@ -20,6 +20,8 @@ import sys
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, set_seed
+import ranking
+
 
 from alignment import (
     DataArguments,
@@ -40,6 +42,8 @@ from simpo_trainer import SimPOTrainer
 from simpo_config import SimPOConfig
 from dataclasses import dataclass, field
 from typing import Optional, Literal
+
+from trl import SFTTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +125,14 @@ def apply_chat_template(
     return example
 
 
+@dataclass
+class RankedConfig:
+    task: str = "simpo"
+    
+
 def main():
-    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig))
-    model_args, data_args, training_args = parser.parse()
+    parser = H4ArgumentParser((ModelArguments, DataArguments, SimPOConfig, RankedConfig))
+    model_args, data_args, training_args, ranking_args = parser.parse()
 
     #######
     # Setup
@@ -162,12 +171,22 @@ def main():
         columns_to_keep=["messages", "chosen", "rejected", "prompt", "completion", "label"],
         # seed=training_args.seed,
     )
-    logger.info(
-        f"Training on the following splits: {[split + ' : ' + str(dset.num_rows) for split, dset in raw_datasets.items()]}"
-    )
     column_names = list(raw_datasets["train"].features)
 
     
+    if training_args.ranking_type == "random":
+        raw_datasets = ranking.get_shuffled_dataset(raw_datasets)
+    elif training_args.ranking_type == "length":
+        raw_datasets = ranking.get_length_sorted(raw_datasets)
+    elif training_args.ranking_type == "complexity":
+        raw_datasets = ranking.get_complexity_sorted(raw_datasets)
+
+    logger.info(
+        f"Training on the following splits: {[split + ' : ' + str(dset.num_rows) for split, dset in raw_datasets.items()]}"
+    )
+    logger.info(
+        f"Training with ranking type: {training_args.ranking_type}"
+    )
 
 
     #####################################
@@ -187,7 +206,7 @@ def main():
         apply_chat_template,
         fn_kwargs={
             "tokenizer": tokenizer,
-            "task": "simpo",
+            "task": ranking_args.task,
             "auto_insert_empty_system_msg": data_args.auto_insert_empty_system_msg,
             "change_template": change_template,
         },
@@ -196,17 +215,19 @@ def main():
         desc="Formatting comparisons with prompt template",
     )
 
-    # Replace column names with what TRL needs, text_chosen -> chosen and text_rejected -> rejected
-    for split in ["train", "test"]:
-        raw_datasets[split] = raw_datasets[split].rename_columns(
-            {"text_prompt": "prompt", "text_chosen": "chosen", "text_rejected": "rejected"}
-        )
+    if ranking_args.task == "simpo":
+        # Replace column names with what TRL needs, text_chosen -> chosen and text_rejected -> rejected
+        for split in ["train", "test"]:
+            raw_datasets[split] = raw_datasets[split].rename_columns(
+                {"text_prompt": "prompt", "text_chosen": "chosen", "text_rejected": "rejected"}
+            )
 
-    # Log a few random samples from the training set:
-    for index in random.sample(range(len(raw_datasets["train"])), 3):
-        logger.info(f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}")
-        logger.info(f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}")
-        logger.info(f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}")
+        # Log a few random samples from the training set:
+        for index in random.sample(range(len(raw_datasets["train"])), 3):
+            logger.info(f"Prompt sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['prompt']}")
+            logger.info(f"Chosen sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['chosen']}")
+            logger.info(f"Rejected sample {index} of the raw training set:\n\n{raw_datasets['train'][index]['rejected']}")
+
 
     torch_dtype = (
         model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
@@ -252,14 +273,24 @@ def main():
     #########################
     # Instantiate SimPO trainer
     #########################
-    trainer = SimPOTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=raw_datasets["train"],
-        eval_dataset=raw_datasets["test"],
-        tokenizer=tokenizer,
-        peft_config=get_peft_config(model_args),
-    )
+    if ranking_args.task == "simpo":
+        trainer = SimPOTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=raw_datasets["train"],
+            eval_dataset=raw_datasets["test"],
+            tokenizer=tokenizer,
+            peft_config=get_peft_config(model_args),
+        )
+    elif ranking_args.task == "sft":
+        trainer = SFTTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=raw_datasets["train"],
+            eval_dataset=raw_datasets["test"],
+            tokenizer=tokenizer,
+            peft_config=get_peft_config(model_args),
+        )
 
     ###############
     # Training loop

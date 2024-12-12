@@ -1,0 +1,51 @@
+# Model arguments
+model_name_or_path: mistralai/Mistral-7B-v0.1
+model_revision: main
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
+
+# Data training arguments
+# chat_template: "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
+chat_template: "{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'].strip() + '\n\n' %}{% else %}{% set loop_messages = messages %}{% set system_message = '' %}{% endif %}{% for message in loop_messages %}{% if loop.index0 == 0 %}{% set content = system_message + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"
+dataset_mixer:
+  HuggingFaceH4/ultrachat_200k: 1.0
+dataset_splits:
+- train_sft
+- test_sft
+preprocessing_num_workers: 12
+
+# DPO arguments
+bf16: true
+beta: 2.0
+do_eval: true
+evaluation_strategy: steps
+eval_steps: 400
+gradient_accumulation_steps: 16
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: False
+hub_model_id: simpo-exps
+learning_rate: 3.0e-7
+log_level: info
+logging_steps: 5
+lr_scheduler_type: cosine
+max_length: 1024
+max_prompt_length: 512
+num_train_epochs: 1
+optim: adamw_torch
+output_dir: outputs/mistral-7b-dpo-baseline
+run_name: mistral-7b-dpo-baseline
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 4
+push_to_hub: false
+save_strategy: "steps"
+save_steps: 50
+report_to:
+- wandb
+save_total_limit: 20000
+seed: 42
+warmup_ratio: 0.1
+
+task: sft
+# sample: 0.1
+# ranking_type: random # random, length, complexity
